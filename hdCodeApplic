@@ -1,0 +1,368 @@
+Custom Module For My game's M1 System has alot of other modules that 80% of them are made by me
+
+
+
+
+local ServerStorage = game:GetService("ServerStorage")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local Remotes = ReplicatedStorage.Events.Remotes
+local CombatActionRemote = Remotes.CombatActionRemote
+local ReplicateRemote = Remotes.ReplicateRemote
+
+local Modules = ReplicatedStorage.Modules
+local Managers = Modules.Managers
+
+local AnimationManager = require(Managers.AnimationManager)
+local SoundManager = require(Managers.Sound)
+local StateManager = require(Managers.StateManager)
+local CombatServices = require(ServerStorage.Modules.Services.CombatServices.CombatServices)
+local OtherServices = require(Modules.SharedServices.OtherServices)
+
+local Assets = ReplicatedStorage.Assets
+local Animations = Assets.Animations
+local Default = Animations.Default
+local M1Animations = Default.M1s
+
+local M1ResetLoops = {}
+local module = {}
+
+local StateService = CombatServices.GetService("StateService")
+local DebounceService = CombatServices.GetService("DebounceService")
+local CooldownService = CombatServices.GetService("CooldownService")
+local MovementService = CombatServices.GetService("MovementService")
+local CharacterStates = CombatServices.GetService("CharacterStates")
+local HitBoxService = CombatServices.GetService("HitBoxService")
+
+local function StartM1ResetLoop(character)
+	if not character or not character.Parent then
+		return
+	end
+
+	if M1ResetLoops[character] then
+		return
+	end
+
+	local resetTime = module.M1Settings.M1ResetTimer
+	local lastCheck = os.clock()
+
+	local connection
+	connection = RunService.Heartbeat:Connect(function()
+		if not character or not character.Parent then
+			connection:Disconnect()
+			M1ResetLoops[character] = nil
+			return
+		end
+
+		local lastM1 = StateManager.GetState(character, "LastM1") or 0
+		if os.clock() - lastM1 >= resetTime then
+			StateService:AddStates({ Char = character, States = { MIndex = 1 } })
+			connection:Disconnect()
+			M1ResetLoops[character] = nil
+		end
+	end)
+
+	M1ResetLoops[character] = connection
+end
+
+local function GetDamageAndKnockback(m1Type, currentMeleeIndex, humanoidRootPart)
+	local damageAmount
+	local knockback
+
+	if m1Type == "DownSlam" and currentMeleeIndex == 4 then
+		damageAmount = module.M1Settings.Damages.DownSlam
+		knockback = {
+			KnockbackType = "Velocity",
+			MaxForce = Vector3.new(2000000000, 20000000, 20000000),
+			Velocity = Vector3.new(0, -10, 0),
+			Time = 0.35
+		}
+	elseif m1Type == "UpperCut" and currentMeleeIndex == 4 then
+		damageAmount = module.M1Settings.Damages.UpperCut
+		knockback = {
+			KnockbackType = "Velocity",
+			MaxForce = Vector3.new(2000000000, 20000000, 20000000),
+			Velocity = Vector3.new(0, 27, 0),
+			Time = 0.35
+		}
+	elseif m1Type == "Normal" and currentMeleeIndex == 4 then
+		damageAmount = module.M1Settings.Damages[4]
+		knockback = {
+			KnockbackType = "Velocity",
+			MaxForce = Vector3.new(30000000, 15000000, 30000000),
+			Velocity = humanoidRootPart.CFrame.LookVector * 45,
+			Time = 0.4
+		}
+	else
+		damageAmount = module.M1Settings.Damages[currentMeleeIndex]
+		knockback = {
+			KnockbackType = "Velocity",
+			MaxForce = Vector3.new(30000000, 15000000, 30000000),
+			Velocity = humanoidRootPart.CFrame.LookVector * 3,
+			Time = 0.1
+		}
+	end
+
+	return damageAmount, knockback
+end
+
+module.M1Settings = {
+	CdType = "M1",
+
+	DefaultM1WalkSpeed = 10,
+	M1EndWalkSpeed = 2,
+	M1ResetTimer = 2,
+
+	M1DebounceDuration = 0.35,
+	M1EndDebounceDuration = 0.4,
+	M1EndDelay = 2.5,
+
+	JumpsDisabledTime = {
+		[1] = 0.6,
+		[2] = 0.6,
+		[3] = 0.6,
+		[4] = 0.6
+	},
+	EnemyStuns = {
+		Normal = 0.6,
+		DownSlam = 2,
+		UpperCut = 2,
+		FourthM1 = 2
+	},
+
+	-- If index gets blocked this is the Stun Duration for the Attacker
+	BlockedPunish = {
+		[1] = .2,
+		[2] = .2,
+		[3] = .3,
+		[4] = .4
+	},
+
+	IgnoreBlock = {
+		Normal = true,
+		UpperCut = true,
+		DownSlam = false
+	},
+
+	Damages = {
+		[1] = 2,
+		[2] = 2,
+		[3] = 2,
+		[4] = 3.5,
+		UpperCut = 3.5,
+		DownSlam = 3.5
+	},
+	M1Size = {
+		Normal = Vector3.new(4, 3, 4),
+		DownSlam = Vector3.new(4, 4, 4),
+		UpperCut = Vector3.new(4, 4, 4)
+	},
+	M1OffSets = {
+		Normal = CFrame.new(0, 2, -4),
+		DownSlam = CFrame.new(0, -2, -4),
+		UpperCut = CFrame.new(0, 0, -4)
+	}
+}
+
+local ValidM1Types = {
+	Normal = true,
+	DownSlam = true,
+	UpperCut = true
+}
+
+local function GetPlayerFromCharacter(character)
+	if not character or not character:IsA("Model") then
+		return nil
+	end
+	return game.Players:GetPlayerFromCharacter(character)
+end
+
+function module.M1(character, data)
+	if type(data) ~= "table" or not character or not character:IsA("Model") then
+		return
+	end
+
+	if DebounceService:HasDebounce({ Char = character }) then
+		return
+	end
+
+	if not CharacterStates:IsCharValid({ Char = character, ShouldBeAlive = true, NotStunned = true }) then
+		return
+	end
+	
+	local currentMeleeIndex = tonumber(StateService:GetState({ Char = character, State = "MIndex" }) or 1)
+	
+	local walkSpeed
+	local debounceDuration
+	local cooldownDuration
+
+	if currentMeleeIndex < 4 then
+		walkSpeed = module.M1Settings.DefaultM1WalkSpeed
+		debounceDuration = module.M1Settings.M1DebounceDuration
+		cooldownDuration = module.M1Settings.M1DebounceDuration
+	else
+		walkSpeed = module.M1Settings.M1EndWalkSpeed
+		debounceDuration = module.M1Settings.M1EndDebounceDuration
+		cooldownDuration = module.M1Settings.M1EndDelay
+	end
+	
+	if not CooldownService:NotOnCooldownThenSetCooldown({
+		Char = character,
+		CDType = module.M1Settings.CdType,
+		Value = cooldownDuration
+		}) then
+		return
+	end
+
+	StateService:SetCurrentAction({ Char = character, Action = "M1" })
+
+	local m1Type = type(data.M1Type) == "string" and data.M1Type or "Normal"
+	if not ValidM1Types[m1Type] then
+		m1Type = "Normal"
+	end
+
+	StateManager.SetState(character, "LastM1", os.clock())
+	StartM1ResetLoop(character)
+
+
+	local punchAnimation
+	if m1Type == "UpperCut" and currentMeleeIndex == 4 then
+		punchAnimation = M1Animations.UpperCut
+	elseif m1Type == "DownSlam" and currentMeleeIndex == 4 then
+		punchAnimation = M1Animations.DownSlam
+	else
+		punchAnimation = M1Animations["Melee" .. currentMeleeIndex]
+	end
+
+
+	local Conns = {}
+	local CleanUpTable = {}
+
+	local punchTrack = AnimationManager.LoadAnim(character, "M1", punchAnimation)
+	Conns.PunchTrackStart = punchTrack:Play()
+
+	table.insert(CleanUpTable,punchTrack)
+
+	Conns.SwingReg = punchTrack:GetMarkerReachedSignal("swingreg"):Connect(function()
+		ReplicateRemote:FireAllClients({
+			Char = character,
+			ActionType = "M1",
+			Function = "Start",
+			M1Function = "SwingReplicate",
+			M1Type = "Default",
+			M1Track = m1Type,
+			M1Index = currentMeleeIndex
+		})
+	end)
+
+	local hitLanded = false
+	
+	Conns.HitReg = punchTrack:GetMarkerReachedSignal("hitreg"):Connect(function()
+		
+		local nextIndex = currentMeleeIndex + 1
+		if nextIndex > 4 then
+			nextIndex = 1
+		end
+		
+		StateService:AddStates({ Char = character, States = { MIndex = nextIndex } })
+
+		local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+		if not humanoidRootPart then
+			return
+		end
+
+		HitBoxService.CreateHitbox({
+			Caster = character,
+			Origin = humanoidRootPart,
+			Size = module.M1Settings.M1Size[m1Type],
+			Offset = module.M1Settings.M1OffSets[m1Type],
+			HitboxType = "Box",
+			HitType = "OneHit",
+			TickInterval = 0.25,
+			DelayTime = 0,
+			Debris = 0.1,
+			IgnoreBlock = module.M1Settings.IgnoreBlock[m1Type],
+
+		}, function(targetCharacter)
+			local targetHumanoid = targetCharacter:FindFirstChild("Humanoid")
+			if not targetHumanoid then
+				return
+			end
+		
+			if not CharacterStates:IsEnemyValid({
+				EnemyChar = targetCharacter,
+				Attacker = character,
+
+				StunForDodgeOnThisAttack = 0.5,
+				BlockedPunish = module.M1Settings.BlockedPunish[currentMeleeIndex],
+
+				IgnoresDead = true,
+				IgnoresRagdoll = true
+				}) then
+				return
+			end
+			
+		
+			hitLanded = true
+			
+			
+			ReplicateRemote:FireAllClients({
+				Char = character,
+				Enemy = targetCharacter,
+				ActionType = "M1",
+				Function = "Start",
+				M1Function = "HitReplicate",
+				M1Type = "Default",
+				M1Track = m1Type,
+				M1Index = currentMeleeIndex
+			})
+
+			local damageAmount, knockback = GetDamageAndKnockback(m1Type, currentMeleeIndex, humanoidRootPart)
+			local stunDuration = (currentMeleeIndex == 4) and 2 or module.M1Settings.EnemyStuns[m1Type]
+			local ragdollData = (currentMeleeIndex == 4) and { Time = module.M1Settings.EnemyStuns.FourthM1 } or nil
+
+			CombatServices.GetService("DamageService"):Damage({
+				Character = character,
+				Enemy = targetCharacter,
+				Damage = damageAmount,
+				StateData = { Stunned = stunDuration },
+				MovementData = {
+					WalkSpeed = 1,
+					JumpPower = 0,
+					Time = module.M1Settings.EnemyStuns[m1Type]
+				},
+				RagdollData = ragdollData,
+				KnockbackData = knockback,
+				CharacterKnockbackData = {
+					KnockbackType = "Velocity",
+					MaxForce = Vector3.new(30000000, 15000000, 30000000),
+					Velocity = humanoidRootPart.CFrame.LookVector * 10,
+					Time = 0.1
+				}
+			})
+		end)
+	end)
+
+
+
+	local finalDebounce = debounceDuration
+	Conns.Debounce = DebounceService:SetDebounce({
+		Char = character,
+		Toggle = true,
+		Duration = finalDebounce
+	})
+	Conns.MovementAdd = MovementService:AddMovements({
+		Char = character,
+		Movements = {
+			WalkSpeed = walkSpeed,
+			JumpHeight = 0
+		},
+		Time = module.M1Settings.JumpsDisabledTime[currentMeleeIndex]
+	})
+
+	OtherServices.GetService("InterruptionHandler"):HandleInterruption({Char = character, ConnsTable = Conns, CleanUpTable = CleanUpTable  })
+
+end
+
+return module
