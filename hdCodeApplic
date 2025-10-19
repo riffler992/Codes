@@ -1,54 +1,60 @@
 --[[ 
 	Custom Module for my game's M1 System
-	Has lots of other modules, 80% of them are made by me
+	Handles the basic melee combo (M1s), cooldowns, hit detection, knockbacks, etc.
+	Most systems and services are custom-made.
 --]]
 
+-- Get Roblox services used in this module
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
--- Remotes used for combat replication
+-- Remotes used for replicating combat actions to clients
 local Remotes = ReplicatedStorage.Events.Remotes
 local CombatActionRemote = Remotes.CombatActionRemote
 local ReplicateRemote = Remotes.ReplicateRemote
 
--- Require other modules we need
+-- Grab the main module folders
 local Modules = ReplicatedStorage.Modules
 local Managers = Modules.Managers
-local AnimationManager = require(Managers.AnimationManager)
-local SoundManager = require(Managers.Sound)
-local StateManager = require(Managers.StateManager)
+
+-- Require managers and services that handle different systems
+local AnimationManager = require(Managers.AnimationManager) -- handles animations loading/playing
+local SoundManager = require(Managers.Sound) -- handles combat sound playback
+local StateManager = require(Managers.StateManager) -- manages char states
 local CombatServices = require(ServerStorage.Modules.Services.CombatServices.CombatServices)
 local OtherServices = require(Modules.SharedServices.OtherServices)
 
--- Assets folder
+-- Assets (animations, sounds, etc.)
 local Assets = ReplicatedStorage.Assets
 local Animations = Assets.Animations
 local Default = Animations.Default
-local M1Animations = Default.M1s
+local M1Animations = Default.M1s -- M1 animation folder
 
--- table to keep track of M1 reset loops per char
+-- Keep track of M1 reset loops per character
 local M1ResetLoops = {}
 
+-- Module table
 local module = {}
 
--- Services from CombatServices
-local StateService = CombatServices.GetService("StateService")
-local DebounceService = CombatServices.GetService("DebounceService")
-local CooldownService = CombatServices.GetService("CooldownService")
-local MovementService = CombatServices.GetService("MovementService")
-local CharacterStates = CombatServices.GetService("CharacterStates")
-local HitBoxService = CombatServices.GetService("HitBoxService")
+-- Get individual services from CombatServices system
+local StateService = CombatServices.GetService("StateService") -- for managing temporary states
+local DebounceService = CombatServices.GetService("DebounceService") -- prevents spammy input
+local CooldownService = CombatServices.GetService("CooldownService") -- for global/internal cooldowns
+local MovementService = CombatServices.GetService("MovementService") -- temporarily change walk speed/jump
+local CharacterStates = CombatServices.GetService("CharacterStates") -- checks if chars are valid/alive
+local HitBoxService = CombatServices.GetService("HitBoxService") -- handles hit detection logic
 
--- function to start a loop that resets M1 index after timer
+-- Starts a timed loop that resets the M1 combo index after no hits for X seconds
 local function StartM1ResetLoop(character)
 	if not character or not character.Parent then return end
-	if M1ResetLoops[character] then return end -- already running
+	if M1ResetLoops[character] then return end -- skip if already running
 
 	local resetTime = module.M1Settings.M1ResetTimer
-	local lastCheck = os.clock() -- keep track of time
+	local lastCheck = os.clock()
 	local connection
 
+	-- Every frame check if the player waited too long to continue their combo
 	connection = RunService.Heartbeat:Connect(function()
 		if not character or not character.Parent then 
 			connection:Disconnect()
@@ -57,6 +63,7 @@ local function StartM1ResetLoop(character)
 		end
 
 		local lastM1 = StateManager.GetState(character, "LastM1") or 0
+		-- if player didn’t hit again for too long, reset combo index to 1
 		if os.clock() - lastM1 >= resetTime then
 			StateService:AddStates({ Char = character, States = { MIndex = 1 } })
 			connection:Disconnect()
@@ -67,11 +74,12 @@ local function StartM1ResetLoop(character)
 	M1ResetLoops[character] = connection
 end
 
--- Get damage and knockback values based on M1 type and index
+-- Decides how much damage and knockback a specific M1 swing deals
 local function GetDamageAndKnockback(m1Type, currentMeleeIndex, humanoidRootPart)
 	local damageAmount
 	local knockback
 
+	-- Special case: Downslam final hit
 	if m1Type == "DownSlam" and currentMeleeIndex == 4 then
 		damageAmount = module.M1Settings.Damages.DownSlam
 		knockback = {
@@ -80,6 +88,8 @@ local function GetDamageAndKnockback(m1Type, currentMeleeIndex, humanoidRootPart
 			Velocity = Vector3.new(0, -10, 0),
 			Time = 0.35
 		}
+
+	-- Special case: Uppercut final hit
 	elseif m1Type == "UpperCut" and currentMeleeIndex == 4 then
 		damageAmount = module.M1Settings.Damages.UpperCut
 		knockback = {
@@ -88,6 +98,8 @@ local function GetDamageAndKnockback(m1Type, currentMeleeIndex, humanoidRootPart
 			Velocity = Vector3.new(0, 27, 0),
 			Time = 0.35
 		}
+
+	-- Normal fourth hit — stronger push forward
 	elseif m1Type == "Normal" and currentMeleeIndex == 4 then
 		damageAmount = module.M1Settings.Damages[4]
 		knockback = {
@@ -96,6 +108,8 @@ local function GetDamageAndKnockback(m1Type, currentMeleeIndex, humanoidRootPart
 			Velocity = humanoidRootPart.CFrame.LookVector * 45,
 			Time = 0.4
 		}
+
+	-- Otherwise, default to a small push forward
 	else
 		damageAmount = module.M1Settings.Damages[currentMeleeIndex]
 		knockback = {
@@ -109,15 +123,15 @@ local function GetDamageAndKnockback(m1Type, currentMeleeIndex, humanoidRootPart
 	return damageAmount, knockback
 end
 
--- M1 Settings
+-- Base settings for M1 system (combo damage, stun times, etc.)
 module.M1Settings = {
-	CdType = "M1",
+	CdType = "M1", -- cooldown type id
 	DefaultM1WalkSpeed = 10,
 	M1EndWalkSpeed = 2,
-	M1ResetTimer = 2,
-	M1DebounceDuration = 0.35,
-	M1EndDebounceDuration = 0.4,
-	M1EndDelay = 2.5,
+	M1ResetTimer = 2, -- reset combo after 2s
+	M1DebounceDuration = 0.35, -- debounce for normal swings
+	M1EndDebounceDuration = 0.4, -- debounce for last swing
+	M1EndDelay = 2.5, -- cooldown before next combo
 	JumpsDisabledTime = { [1] = 0.6, [2] = 0.6, [3] = 0.6, [4] = 0.6 },
 	EnemyStuns = { Normal = 0.6, DownSlam = 2, UpperCut = 2, FourthM1 = 2 },
 	BlockedPunish = { [1] = .2, [2] = .2, [3] = .3, [4] = .4 },
@@ -127,16 +141,16 @@ module.M1Settings = {
 	M1OffSets = { Normal = CFrame.new(0, 2, -4), DownSlam = CFrame.new(0, -2, -4), UpperCut = CFrame.new(0, 0, -4) }
 }
 
--- Only allow these M1 types
+-- Only these attack types are valid
 local ValidM1Types = { Normal = true, DownSlam = true, UpperCut = true }
 
--- Helper function to get player from character
+-- Gets the player from a character model safely
 local function GetPlayerFromCharacter(character)
 	if not character or not character:IsA("Model") then return nil end
 	return game.Players:GetPlayerFromCharacter(character)
 end
 
--- Main M1 function
+-- Main M1 attack logic
 function module.M1(character, data)
 	if type(data) ~= "table" or not character or not character:IsA("Model") then return end
 	if DebounceService:HasDebounce({ Char = character }) then return end
@@ -144,10 +158,8 @@ function module.M1(character, data)
 
 	local currentMeleeIndex = tonumber(StateService:GetState({ Char = character, State = "MIndex" }) or 1)
 
-	-- set walk speed and debounce based on M1 index
-	local walkSpeed
-	local debounceDuration
-	local cooldownDuration
+	-- Change walk speed and cooldown depending on which hit of combo we’re on
+	local walkSpeed, debounceDuration, cooldownDuration
 	if currentMeleeIndex < 4 then
 		walkSpeed = module.M1Settings.DefaultM1WalkSpeed
 		debounceDuration = module.M1Settings.M1DebounceDuration
@@ -158,20 +170,22 @@ function module.M1(character, data)
 		cooldownDuration = module.M1Settings.M1EndDelay
 	end
 
-	-- set cooldown
+	-- Prevent spam by checking if M1 is on cooldown
 	if not CooldownService:NotOnCooldownThenSetCooldown({ Char = character, CDType = module.M1Settings.CdType, Value = cooldownDuration }) then
 		return
 	end
 
 	StateService:SetCurrentAction({ Char = character, Action = "M1" })
 
-	-- determine which animation to play
+	-- figure out which M1 type to use
 	local m1Type = type(data.M1Type) == "string" and data.M1Type or "Normal"
 	if not ValidM1Types[m1Type] then m1Type = "Normal" end
 
+	-- store timestamp for M1 reset loop
 	StateManager.SetState(character, "LastM1", os.clock())
 	StartM1ResetLoop(character)
 
+	-- choose animation based on combo index and type
 	local punchAnimation
 	if m1Type == "UpperCut" and currentMeleeIndex == 4 then
 		punchAnimation = M1Animations.UpperCut
@@ -184,12 +198,12 @@ function module.M1(character, data)
 	local Conns = {}
 	local CleanUpTable = {}
 
-	-- Play animation
+	-- play the actual animation
 	local punchTrack = AnimationManager.LoadAnim(character, "M1", punchAnimation)
-	Conns.PunchTrackStart = punchTrack:Play() -- start the animation
+	Conns.PunchTrackStart = punchTrack:Play()
 	table.insert(CleanUpTable,punchTrack)
 
-	-- Swing registration
+	-- when the swing starts, replicate swing visuals to everyone
 	Conns.SwingReg = punchTrack:GetMarkerReachedSignal("swingreg"):Connect(function()
 		ReplicateRemote:FireAllClients({
 			Char = character,
@@ -204,7 +218,7 @@ function module.M1(character, data)
 
 	local hitLanded = false
 
-	-- Hit registration
+	-- when the hit marker triggers, create the hitbox and apply damage
 	Conns.HitReg = punchTrack:GetMarkerReachedSignal("hitreg"):Connect(function()
 		local nextIndex = currentMeleeIndex + 1
 		if nextIndex > 4 then nextIndex = 1 end
@@ -213,6 +227,7 @@ function module.M1(character, data)
 		local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
 		if not humanoidRootPart then return end
 
+		-- create hitbox and define callback for when it hits someone
 		HitBoxService.CreateHitbox({
 			Caster = character,
 			Origin = humanoidRootPart,
@@ -227,6 +242,8 @@ function module.M1(character, data)
 		}, function(targetCharacter)
 			local targetHumanoid = targetCharacter:FindFirstChild("Humanoid")
 			if not targetHumanoid then return end
+
+			-- make sure target is valid enemy
 			if not CharacterStates:IsEnemyValid({
 				EnemyChar = targetCharacter,
 				Attacker = character,
@@ -238,6 +255,7 @@ function module.M1(character, data)
 
 			hitLanded = true
 
+			-- replicate hit effect to everyone
 			ReplicateRemote:FireAllClients({
 				Char = character,
 				Enemy = targetCharacter,
@@ -249,10 +267,12 @@ function module.M1(character, data)
 				M1Index = currentMeleeIndex
 			})
 
+			-- calculate damage and knockback
 			local damageAmount, knockback = GetDamageAndKnockback(m1Type, currentMeleeIndex, humanoidRootPart)
 			local stunDuration = (currentMeleeIndex == 4) and 2 or module.M1Settings.EnemyStuns[m1Type]
 			local ragdollData = (currentMeleeIndex == 4) and { Time = module.M1Settings.EnemyStuns.FourthM1 } or nil
 
+			-- actually apply damage using service
 			CombatServices.GetService("DamageService"):Damage({
 				Character = character,
 				Enemy = targetCharacter,
@@ -271,7 +291,7 @@ function module.M1(character, data)
 		end)
 	end)
 
-	-- set debounce and movement
+	-- apply movement limit + debounce for attack duration
 	local finalDebounce = debounceDuration
 	Conns.Debounce = DebounceService:SetDebounce({ Char = character, Toggle = true, Duration = finalDebounce })
 	Conns.MovementAdd = MovementService:AddMovements({
@@ -280,7 +300,7 @@ function module.M1(character, data)
 		Time = module.M1Settings.JumpsDisabledTime[currentMeleeIndex]
 	})
 
-	-- Handle interruptions
+	-- handles when player gets interrupted mid-attack
 	OtherServices.GetService("InterruptionHandler"):HandleInterruption({
 		Char = character,
 		ConnsTable = Conns,
