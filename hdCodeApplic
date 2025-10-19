@@ -1,33 +1,38 @@
-Custom Module For My game's M1 System has alot of other modules that 80% of them are made by me
-
-
-
+--[[ 
+	Custom Module for my game's M1 System
+	Has lots of other modules, 80% of them are made by me
+--]]
 
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
+-- Remotes used for combat replication
 local Remotes = ReplicatedStorage.Events.Remotes
 local CombatActionRemote = Remotes.CombatActionRemote
 local ReplicateRemote = Remotes.ReplicateRemote
 
+-- Require other modules we need
 local Modules = ReplicatedStorage.Modules
 local Managers = Modules.Managers
-
 local AnimationManager = require(Managers.AnimationManager)
 local SoundManager = require(Managers.Sound)
 local StateManager = require(Managers.StateManager)
 local CombatServices = require(ServerStorage.Modules.Services.CombatServices.CombatServices)
 local OtherServices = require(Modules.SharedServices.OtherServices)
 
+-- Assets folder
 local Assets = ReplicatedStorage.Assets
 local Animations = Assets.Animations
 local Default = Animations.Default
 local M1Animations = Default.M1s
 
+-- table to keep track of M1 reset loops per char
 local M1ResetLoops = {}
+
 local module = {}
 
+-- Services from CombatServices
 local StateService = CombatServices.GetService("StateService")
 local DebounceService = CombatServices.GetService("DebounceService")
 local CooldownService = CombatServices.GetService("CooldownService")
@@ -35,24 +40,20 @@ local MovementService = CombatServices.GetService("MovementService")
 local CharacterStates = CombatServices.GetService("CharacterStates")
 local HitBoxService = CombatServices.GetService("HitBoxService")
 
+-- function to start a loop that resets M1 index after timer
 local function StartM1ResetLoop(character)
-	if not character or not character.Parent then
-		return
-	end
-
-	if M1ResetLoops[character] then
-		return
-	end
+	if not character or not character.Parent then return end
+	if M1ResetLoops[character] then return end -- already running
 
 	local resetTime = module.M1Settings.M1ResetTimer
-	local lastCheck = os.clock()
-
+	local lastCheck = os.clock() -- keep track of time
 	local connection
+
 	connection = RunService.Heartbeat:Connect(function()
-		if not character or not character.Parent then
+		if not character or not character.Parent then 
 			connection:Disconnect()
 			M1ResetLoops[character] = nil
-			return
+			return 
 		end
 
 		local lastM1 = StateManager.GetState(character, "LastM1") or 0
@@ -66,6 +67,7 @@ local function StartM1ResetLoop(character)
 	M1ResetLoops[character] = connection
 end
 
+-- Get damage and knockback values based on M1 type and index
 local function GetDamageAndKnockback(m1Type, currentMeleeIndex, humanoidRootPart)
 	local damageAmount
 	local knockback
@@ -107,96 +109,45 @@ local function GetDamageAndKnockback(m1Type, currentMeleeIndex, humanoidRootPart
 	return damageAmount, knockback
 end
 
+-- M1 Settings
 module.M1Settings = {
 	CdType = "M1",
-
 	DefaultM1WalkSpeed = 10,
 	M1EndWalkSpeed = 2,
 	M1ResetTimer = 2,
-
 	M1DebounceDuration = 0.35,
 	M1EndDebounceDuration = 0.4,
 	M1EndDelay = 2.5,
-
-	JumpsDisabledTime = {
-		[1] = 0.6,
-		[2] = 0.6,
-		[3] = 0.6,
-		[4] = 0.6
-	},
-	EnemyStuns = {
-		Normal = 0.6,
-		DownSlam = 2,
-		UpperCut = 2,
-		FourthM1 = 2
-	},
-
-	-- If index gets blocked this is the Stun Duration for the Attacker
-	BlockedPunish = {
-		[1] = .2,
-		[2] = .2,
-		[3] = .3,
-		[4] = .4
-	},
-
-	IgnoreBlock = {
-		Normal = true,
-		UpperCut = true,
-		DownSlam = false
-	},
-
-	Damages = {
-		[1] = 2,
-		[2] = 2,
-		[3] = 2,
-		[4] = 3.5,
-		UpperCut = 3.5,
-		DownSlam = 3.5
-	},
-	M1Size = {
-		Normal = Vector3.new(4, 3, 4),
-		DownSlam = Vector3.new(4, 4, 4),
-		UpperCut = Vector3.new(4, 4, 4)
-	},
-	M1OffSets = {
-		Normal = CFrame.new(0, 2, -4),
-		DownSlam = CFrame.new(0, -2, -4),
-		UpperCut = CFrame.new(0, 0, -4)
-	}
+	JumpsDisabledTime = { [1] = 0.6, [2] = 0.6, [3] = 0.6, [4] = 0.6 },
+	EnemyStuns = { Normal = 0.6, DownSlam = 2, UpperCut = 2, FourthM1 = 2 },
+	BlockedPunish = { [1] = .2, [2] = .2, [3] = .3, [4] = .4 },
+	IgnoreBlock = { Normal = true, UpperCut = true, DownSlam = false },
+	Damages = { [1] = 2, [2] = 2, [3] = 2, [4] = 3.5, UpperCut = 3.5, DownSlam = 3.5 },
+	M1Size = { Normal = Vector3.new(4, 3, 4), DownSlam = Vector3.new(4, 4, 4), UpperCut = Vector3.new(4, 4, 4) },
+	M1OffSets = { Normal = CFrame.new(0, 2, -4), DownSlam = CFrame.new(0, -2, -4), UpperCut = CFrame.new(0, 0, -4) }
 }
 
-local ValidM1Types = {
-	Normal = true,
-	DownSlam = true,
-	UpperCut = true
-}
+-- Only allow these M1 types
+local ValidM1Types = { Normal = true, DownSlam = true, UpperCut = true }
 
+-- Helper function to get player from character
 local function GetPlayerFromCharacter(character)
-	if not character or not character:IsA("Model") then
-		return nil
-	end
+	if not character or not character:IsA("Model") then return nil end
 	return game.Players:GetPlayerFromCharacter(character)
 end
 
+-- Main M1 function
 function module.M1(character, data)
-	if type(data) ~= "table" or not character or not character:IsA("Model") then
-		return
-	end
+	if type(data) ~= "table" or not character or not character:IsA("Model") then return end
+	if DebounceService:HasDebounce({ Char = character }) then return end
+	if not CharacterStates:IsCharValid({ Char = character, ShouldBeAlive = true, NotStunned = true }) then return end
 
-	if DebounceService:HasDebounce({ Char = character }) then
-		return
-	end
-
-	if not CharacterStates:IsCharValid({ Char = character, ShouldBeAlive = true, NotStunned = true }) then
-		return
-	end
-	
 	local currentMeleeIndex = tonumber(StateService:GetState({ Char = character, State = "MIndex" }) or 1)
-	
+
+	-- set walk speed and debounce based on M1 index
 	local walkSpeed
 	local debounceDuration
 	local cooldownDuration
-
 	if currentMeleeIndex < 4 then
 		walkSpeed = module.M1Settings.DefaultM1WalkSpeed
 		debounceDuration = module.M1Settings.M1DebounceDuration
@@ -206,25 +157,20 @@ function module.M1(character, data)
 		debounceDuration = module.M1Settings.M1EndDebounceDuration
 		cooldownDuration = module.M1Settings.M1EndDelay
 	end
-	
-	if not CooldownService:NotOnCooldownThenSetCooldown({
-		Char = character,
-		CDType = module.M1Settings.CdType,
-		Value = cooldownDuration
-		}) then
+
+	-- set cooldown
+	if not CooldownService:NotOnCooldownThenSetCooldown({ Char = character, CDType = module.M1Settings.CdType, Value = cooldownDuration }) then
 		return
 	end
 
 	StateService:SetCurrentAction({ Char = character, Action = "M1" })
 
+	-- determine which animation to play
 	local m1Type = type(data.M1Type) == "string" and data.M1Type or "Normal"
-	if not ValidM1Types[m1Type] then
-		m1Type = "Normal"
-	end
+	if not ValidM1Types[m1Type] then m1Type = "Normal" end
 
 	StateManager.SetState(character, "LastM1", os.clock())
 	StartM1ResetLoop(character)
-
 
 	local punchAnimation
 	if m1Type == "UpperCut" and currentMeleeIndex == 4 then
@@ -235,15 +181,15 @@ function module.M1(character, data)
 		punchAnimation = M1Animations["Melee" .. currentMeleeIndex]
 	end
 
-
 	local Conns = {}
 	local CleanUpTable = {}
 
+	-- Play animation
 	local punchTrack = AnimationManager.LoadAnim(character, "M1", punchAnimation)
-	Conns.PunchTrackStart = punchTrack:Play()
-
+	Conns.PunchTrackStart = punchTrack:Play() -- start the animation
 	table.insert(CleanUpTable,punchTrack)
 
+	-- Swing registration
 	Conns.SwingReg = punchTrack:GetMarkerReachedSignal("swingreg"):Connect(function()
 		ReplicateRemote:FireAllClients({
 			Char = character,
@@ -257,20 +203,15 @@ function module.M1(character, data)
 	end)
 
 	local hitLanded = false
-	
+
+	-- Hit registration
 	Conns.HitReg = punchTrack:GetMarkerReachedSignal("hitreg"):Connect(function()
-		
 		local nextIndex = currentMeleeIndex + 1
-		if nextIndex > 4 then
-			nextIndex = 1
-		end
-		
+		if nextIndex > 4 then nextIndex = 1 end
 		StateService:AddStates({ Char = character, States = { MIndex = nextIndex } })
 
 		local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
-		if not humanoidRootPart then
-			return
-		end
+		if not humanoidRootPart then return end
 
 		HitBoxService.CreateHitbox({
 			Caster = character,
@@ -283,30 +224,20 @@ function module.M1(character, data)
 			DelayTime = 0,
 			Debris = 0.1,
 			IgnoreBlock = module.M1Settings.IgnoreBlock[m1Type],
-
 		}, function(targetCharacter)
 			local targetHumanoid = targetCharacter:FindFirstChild("Humanoid")
-			if not targetHumanoid then
-				return
-			end
-		
+			if not targetHumanoid then return end
 			if not CharacterStates:IsEnemyValid({
 				EnemyChar = targetCharacter,
 				Attacker = character,
-
 				StunForDodgeOnThisAttack = 0.5,
 				BlockedPunish = module.M1Settings.BlockedPunish[currentMeleeIndex],
-
 				IgnoresDead = true,
 				IgnoresRagdoll = true
-				}) then
-				return
-			end
-			
-		
+			}) then return end
+
 			hitLanded = true
-			
-			
+
 			ReplicateRemote:FireAllClients({
 				Char = character,
 				Enemy = targetCharacter,
@@ -327,11 +258,7 @@ function module.M1(character, data)
 				Enemy = targetCharacter,
 				Damage = damageAmount,
 				StateData = { Stunned = stunDuration },
-				MovementData = {
-					WalkSpeed = 1,
-					JumpPower = 0,
-					Time = module.M1Settings.EnemyStuns[m1Type]
-				},
+				MovementData = { WalkSpeed = 1, JumpPower = 0, Time = module.M1Settings.EnemyStuns[m1Type] },
 				RagdollData = ragdollData,
 				KnockbackData = knockback,
 				CharacterKnockbackData = {
@@ -344,25 +271,21 @@ function module.M1(character, data)
 		end)
 	end)
 
-
-
+	-- set debounce and movement
 	local finalDebounce = debounceDuration
-	Conns.Debounce = DebounceService:SetDebounce({
-		Char = character,
-		Toggle = true,
-		Duration = finalDebounce
-	})
+	Conns.Debounce = DebounceService:SetDebounce({ Char = character, Toggle = true, Duration = finalDebounce })
 	Conns.MovementAdd = MovementService:AddMovements({
 		Char = character,
-		Movements = {
-			WalkSpeed = walkSpeed,
-			JumpHeight = 0
-		},
+		Movements = { WalkSpeed = walkSpeed, JumpHeight = 0 },
 		Time = module.M1Settings.JumpsDisabledTime[currentMeleeIndex]
 	})
 
-	OtherServices.GetService("InterruptionHandler"):HandleInterruption({Char = character, ConnsTable = Conns, CleanUpTable = CleanUpTable  })
-
+	-- Handle interruptions
+	OtherServices.GetService("InterruptionHandler"):HandleInterruption({
+		Char = character,
+		ConnsTable = Conns,
+		CleanUpTable = CleanUpTable
+	})
 end
 
 return module
